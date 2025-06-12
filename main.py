@@ -39,7 +39,7 @@ def fetch_messages_periodically():
                 )
                 for item in data.get('Items', [])
             ]
-            new_messages.sort(key=lambda msg: msg.timestamp, reverse=True)
+            new_messages.sort(key=lambda msg: msg.timestamp, reverse=False)
             with messages_cache_lock:
                 messages_cache = new_messages
         except Exception as e:
