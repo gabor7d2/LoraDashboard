@@ -8,6 +8,19 @@ from datetime import datetime
 import threading
 import time
 
+try:
+    from urllib.parse import urlparse, urlencode, parse_qs
+except ImportError:
+    from urlparse import urlparse, parse_qs
+    from urllib import urlencode
+
+import re
+import sys
+import requests
+from boto3 import Session
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+
 messages_cache = []
 messages_cache_lock = threading.Lock()
 
@@ -49,20 +62,6 @@ oauth.register(
   client_kwargs={'scope': 'email openid phone'}
 )
 
-try:
-    from urllib.parse import urlparse, urlencode, parse_qs
-except ImportError:
-    from urlparse import urlparse, parse_qs
-    from urllib import urlencode
-
-import re
-import sys
-import os
-import requests
-from boto3 import Session
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
-
 def signing_headers(method, url_string, body):
     # Adapted from:
     #   https://github.com/jmenga/requests-aws-sign/blob/master/requests_aws_sign/requests_aws_sign.py
@@ -91,35 +90,11 @@ class Message:
 @app.route('/')
 def index():
     user = session.get('user')
-
-    if user:
-        url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticMessages"
-
-        response = requests.get(url, headers=signing_headers("GET", url, ""))
-        data = response.json()
-
-        messages = [
-            Message(text=item['message']['S'], sender=item['sender']['S'], timestamp=datetime.fromisoformat(item['timestamp']['S']))
-            for item in data.get('Items', [])
-        ]
-        messages.sort(key=lambda msg: msg.timestamp, reverse=True)
-
-        #messages = [
-        #       Message("Hello!", "Alice"),
-        #       Message("How are you?", "Bob"),
-        #       Message("Don't forget our meeting.", "Charlie")
-        #]
-
-        return render_template('index.html', user=user, messages=messages)
-    else:
-        return render_template('index.html', user=None, messages=[])
+    return render_template('index.html', user=user)
 
 @app.route('/login')
 def login():
-    # Alternate option to redirect to /authorize
-    #redirect_uri = url_for('authorize', _external=True)
     return oauth.oidc.authorize_redirect('https://lora-keygen.gabor7d2.hu/authorize')
-    #return oauth.oidc.authorize_redirect('https://d84l1y8p4kdic.cloudfront.net')
 
 @app.route('/authorize')
 def authorize():
@@ -135,6 +110,11 @@ def logout():
 
 @app.route('/messages')
 def get_messages():
+    user = session.get('user')
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    # Return cached messages
     with messages_cache_lock:
         msgs = [
             {
@@ -172,11 +152,11 @@ def generate_qr():
 @app.route('/qr')
 def show_qr():
     user = session.get('user')
-    if user:
-        img_base64 = generate_qr()
-        return render_template('qr_code.html', img_data=img_base64, url=STATIC_URL)
-    else:
-        return redirect(url_for('login'))
+    if not user:
+        return redirect(url_for('index'))
+    
+    img_base64 = generate_qr()
+    return render_template('qr_code.html', img_data=img_base64, url=STATIC_URL)
 
 if __name__ == '__main__':
     app.run(port=5002, debug=True)
