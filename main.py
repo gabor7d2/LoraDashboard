@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, session, jsonify
+from flask import Flask, render_template, redirect, url_for, session, jsonify, request
 from authlib.integrations.flask_client import OAuth
 import os
 import qrcode
@@ -207,6 +207,20 @@ def get_teams():
             if username in team.allowedUsers
         ]
     return jsonify(teams)
+
+@app.route('/sendMessage', methods=['POST'])
+def send_message():
+    user = session.get('user')
+    if not user or 'cognito:username' not in user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json()
+    target_teams = data.get('targetTeams', [])
+    message = data.get('message', '')
+    print(f"SendMessage called by {user['cognito:username']}:")
+    print("Target teams:", target_teams)
+    print("Message:", message)
+    return jsonify({"status": "ok"})
 
 
 
