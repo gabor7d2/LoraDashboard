@@ -64,9 +64,10 @@ class Message:
         self.timestamp = timestamp or datetime.now()
 
 class Team:
-    def __init__(self, teamId, teamName):
+    def __init__(self, teamId, teamName, allowedUsers):
         self.teamId = teamId
         self.teamName = teamName
+        self.allowedUsers = allowedUsers or []
 
 
 
@@ -74,34 +75,32 @@ class Team:
 messages_cache = []
 messages_cache_lock = threading.Lock()
 
-def fetch_messages_periodically():
+def fetch_messages():
     global messages_cache
-    while True:
-        try:
-            url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticMessages"
-            response = requests.get(url, headers=signing_headers("GET", url, ""))
-            data = response.json()
-            new_messages = [
-                Message(
-                    messageId=item['messageId']['S'],
-                    message=item['message']['S'],
-                    sender=item['sender']['S'],
-                    receiver=item['receiver']['S'],
-                    timestamp=datetime.fromisoformat(item['timestamp']['S'])
-                )
-                for item in data.get('Items', [])
-            ]
-            new_messages.sort(key=lambda msg: msg.timestamp, reverse=False)
-            with messages_cache_lock:
-                messages_cache = new_messages
-        except Exception as e:
-            print("Error fetching messages:", e)
-        time.sleep(10)
+    try:
+        url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticMessages"
+        response = requests.get(url, headers=signing_headers("GET", url, ""))
+        data = response.json()
+        new_messages = [
+            Message(
+                messageId=item['messageId']['S'],
+                message=item['message']['S'],
+                sender=item['sender']['S'],
+                receiver=item['receiver']['S'],
+                timestamp=datetime.fromisoformat(item['timestamp']['S'])
+            )
+            for item in data.get('Items', [])
+        ]
+        new_messages.sort(key=lambda msg: msg.timestamp, reverse=False)
+        with messages_cache_lock:
+            messages_cache = new_messages
+    except Exception as e:
+        print("Error fetching messages:", e)
 
 teams_cache = []
 teams_cache_lock = threading.Lock()
 
-def fetch_teams_once():
+def fetch_teams():
     global teams_cache
     try:
         url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticTeams"
@@ -110,7 +109,10 @@ def fetch_teams_once():
         loaded_teams = [
             Team(
                 teamId=item['teamId']['S'],
-                teamName=item['teamName']['S']
+                teamName=item['teamName']['S'],
+                allowedUsers=[
+                    user['S'] for user in item.get('allowedUsers', {}).get('L', [])
+                ] if 'allowedUsers' in item else []
             )
             for item in data.get('Items', [])
         ]
@@ -120,11 +122,15 @@ def fetch_teams_once():
     except Exception as e:
         print("Error fetching teams:", e)
 
-# Start background thread for fetching messages periodically
-threading.Thread(target=fetch_messages_periodically, daemon=True).start()
+def fetch_data_periodically():
+    global messages_cache, teams_cache
+    while True:
+        fetch_teams()
+        fetch_messages()
+        time.sleep(10)
 
-# Fetch teams at app startup
-fetch_teams_once()
+# Start background thread for fetching data periodically
+threading.Thread(target=fetch_data_periodically, daemon=True).start()
 
 
 
@@ -133,9 +139,7 @@ fetch_teams_once()
 @app.route('/')
 def index():
     user = session.get('user')
-    with teams_cache_lock:
-        teams = list(teams_cache)  # Make a shallow copy while holding the lock
-    return render_template('index.html', user=user, teams=teams)
+    return render_template('index.html', user=user)
 
 @app.route('/login')
 def login():
@@ -160,10 +164,18 @@ def logout():
 @app.route('/messages')
 def get_messages():
     user = session.get('user')
-    if not user:
+    if not user or 'cognito:username' not in user:
         return jsonify({"error": "Unauthorized"}), 401
+
+    username = user['cognito:username']
+
+    # Get team IDs the user is allowed to access
+    with teams_cache_lock:
+        allowed_team_ids = {team.teamId for team in teams_cache if username in team.allowedUsers}
     
-    # Return cached messages
+    print(f"Allowed team IDs for user {username}: {allowed_team_ids}")
+
+    # Return only messages where receiver is in allowed_team_ids
     with messages_cache_lock:
         msgs = [
             {
@@ -174,8 +186,27 @@ def get_messages():
                 "message": msg.message
             }
             for msg in messages_cache
+            if msg.receiver in allowed_team_ids
         ]
     return jsonify(msgs)
+
+@app.route('/teams')
+def get_teams():
+    user = session.get('user')
+    if not user or 'cognito:username' not in user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    username = user['cognito:username']
+    with teams_cache_lock:
+        teams = [
+            {
+                "teamId": team.teamId,
+                "teamName": team.teamName
+            }
+            for team in teams_cache
+            if username in team.allowedUsers
+        ]
+    return jsonify(teams)
 
 
 

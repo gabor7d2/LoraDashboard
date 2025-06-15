@@ -13,7 +13,7 @@
     }
     tr.new-message, td.new-message {
         animation-name: new-message-flash;
-        animation-duration: 10s;
+        animation-duration: 5s;
     }
     /* Floating card style for tables */
     .floating-card {
@@ -48,16 +48,16 @@
 <body class="bg-light">
     <div class="container mt-5">
         <div class="card p-4 text-center shadow-sm">
+            <h2 class="mb-1">Central Dashboard</h2>
             {% if user %}
-                <h2 class="mb-1">Central Dashboard</h2>
                 <h4 class="mb-4" style="color: gray;">Logged in as {{ user.name }} ({{ user.email }})</h4>
-                <h4 class="mb-4" style="color: gray;">Debug info: {{ user }})</h4>
+                <p class="mb-4" style="color: gray;">{{ user }})</p>
                 <div class="d-grid gap-2 d-sm-flex justify-content-sm-center">
                     <a href="/qr" class="btn btn-primary">QR Key Generator</a>
                     <a href="/logout" class="btn btn-outline-danger">Logout</a>
                 </div>
                 <div class="row mt-4">
-                    <div class="col-md-3">
+                    <div class="col-md-3 mb-3">
                         <div class="floating-card p-0">
                             <table class="table table-hover align-middle w-100">
                                 <thead class="table-light">
@@ -66,14 +66,6 @@
                                     </tr>
                                 </thead>
                                 <tbody id="team-selector">
-                                    {% for team in teams %}
-                                    <tr class="team-selector-row" data-team-id="{{ team.teamId }}">
-                                        <td class="text-center">
-                                            <input class="form-check-input team-checkbox" type="checkbox" value="{{ team.teamId }}" id="team-{{ team.teamId }}" checked>
-                                        </td>
-                                        <td>{{ team.teamName }}</td>
-                                    </tr>
-                                    {% endfor %}
                                 </tbody>
                             </table>
                         </div>
@@ -83,92 +75,159 @@
                             <table class="table table-striped align-middle w-100">
                                 <thead class="table-light">
                                     <tr>
-                                        <th colspan="3"><h4>Messages</h4></th>
+                                        <th colspan="4"><h4>Messages</h4></th>
                                     </tr>
                                     <tr>
-                                        <th scope="col">Timestamp</th>
-                                        <th scope="col">Sender</th>
-                                        <th scope="col">Message</th>
+                                        <th scope="col" style="width: 20%;">Timestamp</th>
+                                        <th scope="col" style="width: 15%;">Team</th>
+                                        <th scope="col" style="width: 15%;">Sender</th>
+                                        <th scope="col" style="width: 50%;">Message</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody id="message-table">
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </div>
             {% else %}
-                <h2 class="mb-3">Welcome!</h2>
-                <a href="/login" class="btn btn-success">Login</a>
+                <div class="d-flex justify-content-center">
+                    <a href="/login" class="mt-2 btn btn-success" style="width: 140px;">Login</a>
+                </div>
             {% endif %}
         </div>
     </div>
-<script>
-{% if user %}
-    let lastCount = null; // null means first fetch
+    <script>
+    {% if user %}
+        let allMessages = [];
+        let allTeams = [];
+        let prevMessageIds = new Set();
+        let firstLoad = true;
+        // Store checkbox states: { teamId: true/false }
+        let teamCheckboxStates = {};
 
-    function updateMessages() {
-        fetch('/messages')
-            .then(response => response.json())
-            .then(data => {
-                const tbody = document.querySelector('div.col-md-9 tbody');
-                const newCount = data.length;
-                if (lastCount === null) {
-                    // First fetch: render all messages in reverse order (newest at top)
-                    for (let i = data.length - 1; i >= 0; i--) {
-                        const msg = data[i];
-                        const row = document.createElement('tr');
-                        ['timestamp', 'sender', 'message'].forEach(key => {
-                            const td = document.createElement('td');
-                            td.textContent = msg[key];
-                            row.appendChild(td);
-                        });
-                        tbody.appendChild(row);
+        // Helper: create a message row element
+        function createMessageRow(msg, teamName, isNew) {
+            const tr = document.createElement('tr');
+            if (isNew) {
+                tr.classList.add('new-message');
+            }
+            tr.innerHTML = `
+                <td${isNew ? ' class="new-message"' : ''}>${msg.timestamp}</td>
+                <td${isNew ? ' class="new-message"' : ''}>${teamName}</td>
+                <td${isNew ? ' class="new-message"' : ''}>${msg.sender}</td>
+                <td${isNew ? ' class="new-message"' : ''}>${msg.message}</td>
+            `;
+            return tr;
+        }
+
+        // Helper: get selected team IDs
+        function getSelectedTeamIds() {
+            return Object.entries(teamCheckboxStates)
+                .filter(([teamId, checked]) => checked)
+                .map(([teamId]) => teamId);
+        }
+
+        // Display messages filtered by selected teams
+        function displayMessages(newIds = []) {
+            const selectedTeams = getSelectedTeamIds();
+            const tbody = document.querySelector('#message-table');
+            tbody.innerHTML = '';
+            allMessages.forEach(msg => {
+                if (selectedTeams.includes(String(msg.receiver))) {
+                    let teamName = '';
+                    if (Array.isArray(allTeams)) {
+                        const team = allTeams.find(t => t.teamId == msg.receiver);
+                        teamName = team ? team.teamName : '';
                     }
-                } else {
-                    // Only add new messages with animation, oldest new at top
-                    for (let i = lastCount; i < newCount; i++) {
-                        const msg = data[i];
-                        const row = document.createElement('tr');
-                        row.classList.add('new-message');
-                        ['timestamp', 'sender', 'message'].forEach(key => {
-                            const td = document.createElement('td');
-                            td.textContent = msg[key];
-                            td.classList.add('new-message');
-                            row.appendChild(td);
-                        });
-                        if (tbody.firstChild) {
-                            tbody.insertBefore(row, tbody.firstChild);
-                        } else {
-                            tbody.appendChild(row);
-                        }
-                    }
+                    const isNew = !firstLoad && newIds.includes(msg.messageId);
+                    tbody.appendChild(createMessageRow(msg, teamName, isNew));
                 }
-                lastCount = newCount;
             });
-    }
-    setInterval(updateMessages, 5000);
-    updateMessages();
+        }
 
-    // Make team selector rows clickable
-    document.querySelectorAll('.team-selector-row').forEach(row => {
-        row.addEventListener('click', function(e) {
-            // Prevent double toggling if checkbox is clicked directly
-            if (e.target.tagName.toLowerCase() === 'input') return;
-            const checkbox = this.querySelector('.team-checkbox');
-            checkbox.checked = !checkbox.checked;
-            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-    });
+        function updateData() {
+            // Fetch all teams
+            fetch('/teams')
+                .then(response => response.json())
+                .then(data => {
+                    allTeams = data;
 
-    // Team selector event listener
-    document.querySelectorAll('.team-checkbox').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const selected = Array.from(document.querySelectorAll('.team-checkbox:checked')).map(cb => cb.value);
-            console.log('Selected teams:', selected);
-        });
-    });
-{% endif %}
-</script>
+                    // Add new teams to teamCheckboxStates, all checked by default
+                    data.forEach(team => {
+                        const tid = String(team.teamId);
+                        if (!(tid in teamCheckboxStates)) {
+                            teamCheckboxStates[tid] = true;
+                        }
+                    });
+
+                    // Update teams table
+                    const teamTbody = document.querySelector('#team-selector');
+                    teamTbody.innerHTML = '';
+                    data.forEach(team => {
+                        const tid = String(team.teamId);
+                        const tr = document.createElement('tr');
+                        tr.className = 'team-selector-row';
+                        tr.setAttribute('data-team-id', tid);
+                        tr.innerHTML = `
+                            <td class="text-center">
+                                <input class="form-check-input team-checkbox" type="checkbox" value="${tid}" id="team-${tid}" ${teamCheckboxStates[tid] ? 'checked' : ''}>
+                            </td>
+                            <td>${team.teamName}</td>
+                        `;
+                        teamTbody.appendChild(tr);
+                    });
+
+                    // Re-attach click handlers for new rows
+                    document.querySelectorAll('.team-selector-row').forEach(row => {
+                        row.addEventListener('click', function(e) {
+                            if (e.target.tagName.toLowerCase() === 'input') return;
+                            const checkbox = this.querySelector('.team-checkbox');
+                            checkbox.checked = !checkbox.checked;
+                            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                        });
+                    });
+
+                    // Attach change handler to checkboxes
+                    document.querySelectorAll('.team-checkbox').forEach(cb => {
+                        cb.addEventListener('change', function() {
+                            teamCheckboxStates[this.value] = this.checked;
+                            displayMessages();
+                        });
+                    });
+
+                    displayMessages();
+                });
+
+            // Fetch all messages
+            fetch('/messages')
+                .then(response => response.json())
+                .then(data => {
+                    // Sort by timestamp descending
+                    data.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+                    // Get current messageIds for comparison
+                    const currentIds = new Set(data.map(msg => msg.messageId));
+
+                    // Find new messages (if not first load)
+                    let newIds = [];
+                    if (!firstLoad) {
+                        newIds = data
+                            .filter(msg => !prevMessageIds.has(msg.messageId))
+                            .map(msg => msg.messageId);
+                    }
+
+                    // Update state
+                    allMessages = data;
+                    prevMessageIds = currentIds;
+                    displayMessages(newIds);
+                    if (firstLoad) firstLoad = false;
+                });
+        }
+
+        setInterval(updateData, 5000);
+        updateData();
+    {% endif %}
+    </script>
 </body>
 </html>
