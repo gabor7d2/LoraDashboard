@@ -28,8 +28,8 @@ oauth = OAuth(app)
 oauth.register(
   name='oidc',
   authority='https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_9fgHZ61yH',
-  client_id='6uel2db6j5saqmaj25shnu034p',
-  client_secret='1nddrgdd198lcvn4dtn2gctosdgdmjip729kt1vq1thr9o0lg188',
+  client_id=os.environ.get('OIDC_CLIENT_ID'),
+  client_secret=os.environ.get('OIDC_CLIENT_SECRET'),
   server_metadata_url='https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_9fgHZ61yH/.well-known/openid-configuration',
   client_kwargs={'scope': 'email openid phone profile'}
 )
