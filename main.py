@@ -21,34 +21,6 @@ from boto3 import Session
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
-messages_cache = []
-messages_cache_lock = threading.Lock()
-
-def fetch_messages_periodically():
-    global messages_cache
-    while True:
-        try:
-            url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticMessages"
-            response = requests.get(url, headers=signing_headers("GET", url, ""))
-            data = response.json()
-            new_messages = [
-                Message(
-                    text=item['message']['S'],
-                    sender=item['sender']['S'],
-                    timestamp=datetime.fromisoformat(item['timestamp']['S'])
-                )
-                for item in data.get('Items', [])
-            ]
-            new_messages.sort(key=lambda msg: msg.timestamp, reverse=False)
-            with messages_cache_lock:
-                messages_cache = new_messages
-        except Exception as e:
-            print("Error fetching messages:", e)
-        time.sleep(10)
-
-# Start background thread
-threading.Thread(target=fetch_messages_periodically, daemon=True).start()
-
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Use a secure random key in production
 oauth = OAuth(app)
@@ -59,7 +31,7 @@ oauth.register(
   client_id='***REMOVED***',
   client_secret='***REMOVED***',
   server_metadata_url='https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_9fgHZ61yH/.well-known/openid-configuration',
-  client_kwargs={'scope': 'email openid phone'}
+  client_kwargs={'scope': 'email openid phone profile'}
 )
 
 def signing_headers(method, url_string, body):
@@ -81,16 +53,89 @@ def signing_headers(method, url_string, body):
     return dict(request.headers.items())
 
 
+
+# Data models
 class Message:
-    def __init__(self, text, sender, timestamp=None):
-        self.text = text
+    def __init__(self, messageId, message, sender, receiver, timestamp=None):
+        self.messageId = messageId
+        self.message = message
         self.sender = sender
+        self.receiver = receiver
         self.timestamp = timestamp or datetime.now()
 
+class Team:
+    def __init__(self, teamId, teamName):
+        self.teamId = teamId
+        self.teamName = teamName
+
+
+
+# Data loading from DynamoDB
+messages_cache = []
+messages_cache_lock = threading.Lock()
+
+def fetch_messages_periodically():
+    global messages_cache
+    while True:
+        try:
+            url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticMessages"
+            response = requests.get(url, headers=signing_headers("GET", url, ""))
+            data = response.json()
+            new_messages = [
+                Message(
+                    messageId=item['messageId']['S'],
+                    message=item['message']['S'],
+                    sender=item['sender']['S'],
+                    receiver=item['receiver']['S'],
+                    timestamp=datetime.fromisoformat(item['timestamp']['S'])
+                )
+                for item in data.get('Items', [])
+            ]
+            new_messages.sort(key=lambda msg: msg.timestamp, reverse=False)
+            with messages_cache_lock:
+                messages_cache = new_messages
+        except Exception as e:
+            print("Error fetching messages:", e)
+        time.sleep(10)
+
+teams_cache = []
+teams_cache_lock = threading.Lock()
+
+def fetch_teams_once():
+    global teams_cache
+    try:
+        url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages?TableName=MeshtasticTeams"
+        response = requests.get(url, headers=signing_headers("GET", url, ""))
+        data = response.json()
+        loaded_teams = [
+            Team(
+                teamId=item['teamId']['S'],
+                teamName=item['teamName']['S']
+            )
+            for item in data.get('Items', [])
+        ]
+        loaded_teams.sort(key=lambda msg: msg.teamName)
+        with teams_cache_lock:
+            teams_cache = loaded_teams
+    except Exception as e:
+        print("Error fetching teams:", e)
+
+# Start background thread for fetching messages periodically
+threading.Thread(target=fetch_messages_periodically, daemon=True).start()
+
+# Fetch teams at app startup
+fetch_teams_once()
+
+
+
+
+# General endpoints
 @app.route('/')
 def index():
     user = session.get('user')
-    return render_template('index.html', user=user)
+    with teams_cache_lock:
+        teams = list(teams_cache)  # Make a shallow copy while holding the lock
+    return render_template('index.html', user=user, teams=teams)
 
 @app.route('/login')
 def login():
@@ -108,6 +153,10 @@ def logout():
     session.pop('user', None)
     return redirect(url_for('index'))
 
+
+
+
+# API endpoints
 @app.route('/messages')
 def get_messages():
     user = session.get('user')
@@ -118,14 +167,20 @@ def get_messages():
     with messages_cache_lock:
         msgs = [
             {
+                "messageId": msg.messageId,
                 "timestamp": msg.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                 "sender": msg.sender,
-                "text": msg.text
+                "receiver": msg.receiver,
+                "message": msg.message
             }
             for msg in messages_cache
         ]
     return jsonify(msgs)
 
+
+
+
+# Key generator
 # Static URL to encode in QR code
 STATIC_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
