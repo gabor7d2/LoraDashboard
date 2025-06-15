@@ -143,7 +143,7 @@ def index():
 
 @app.route('/login')
 def login():
-    return oauth.oidc.authorize_redirect('https://lora-keygen.gabor7d2.hu/authorize')
+    return oauth.oidc.authorize_redirect('https://lora-dashboard.gabor7d2.hu/authorize')
 
 @app.route('/authorize')
 def authorize():
@@ -249,14 +249,17 @@ def generate_qr():
     img_buffer.seek(0)
     return base64.b64encode(img_buffer.getvalue()).decode()
 
-@app.route('/qr')
-def show_qr():
+@app.route('/keygen')
+def keygen():
     user = session.get('user')
     if not user:
-        return redirect(url_for('index'))
-    
+        return jsonify({"error": "Unauthorized"}), 401
+
     img_base64 = generate_qr()
-    return render_template('qr_code.html', img_data=img_base64, url=STATIC_URL)
+    return jsonify({
+        "img_data": img_base64,
+        "url": STATIC_URL
+    })
 
 if __name__ == '__main__':
-    app.run(port=5002, debug=True)
+    app.run(port=5001, debug=True)
