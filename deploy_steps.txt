@@ -1,0 +1,3 @@
+pip install authlib werkzeug flask requests qrcode[pil] protobuf meshtastic awscrt awsiotsdk boto3 pytz
+
+protoc --python_out=. meshtastic-channelset-stripped-reduced.proto

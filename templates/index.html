@@ -51,7 +51,7 @@
             <h2 class="mb-1">Central Dashboard</h2>
             {% if user %}
                 <h4 class="mb-4" style="color: gray;">Logged in as {{ user.name }} ({{ user.email }})</h4>
-                <p class="mb-4" style="color: gray;">{{ user }}</p>
+                <!--<p class="mb-4" style="color: gray;">{{ user }}</p>-->
                 <div class="d-grid gap-2 d-sm-flex justify-content-sm-center">
                     <button id="sendMessageBtn" class="btn btn-warning">Send Message</button>
                     <button id="keyGenBtn" class="btn btn-primary">Key Generator</button>
@@ -141,7 +141,7 @@
           </div>
           <div class="modal-body">
             <div class="alert alert-info" role="alert">
-              A different encryption key should be generated for each team's devices. Each device of the team should scan the generated QR code or use the URL to set its channel configuration and encryption keys, and then a new key should be generated for the next team and so on. This ensures secure and isolated communication for each team.
+              A different encryption key should be generated for each team's devices. Each team member should scan the generated QR code or use the URL to set its channel configuration and encryption keys, and then a new key should be generated for the next team and so on. This ensures secure and isolated communication for each team.
             </div>
             <div class="alert alert-danger" role="alert">
               <strong>Warning:</strong> The generated QR code and URL are sensitive. Do not show them to anyone unauthorized! If it is suspected to be leaked, all devices using that key must have their key replaced with a newly generated one.

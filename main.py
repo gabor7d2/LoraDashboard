@@ -7,6 +7,9 @@ import base64
 from datetime import datetime
 import threading
 import time
+import json
+import uuid
+import pytz
 
 try:
     from urllib.parse import urlparse, urlencode, parse_qs
@@ -24,6 +27,9 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 import meshtastic_channelset_stripped_reduced_pb2 as proto
+
+from awscrt import mqtt, http
+from awsiot import mqtt_connection_builder
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Use a secure random key in production
@@ -68,10 +74,11 @@ class Message:
         self.timestamp = timestamp or datetime.now()
 
 class Team:
-    def __init__(self, teamId, teamName, allowedUsers):
+    def __init__(self, teamId, teamName, allowedUsers, gatewayNodeId=None):
         self.teamId = teamId
         self.teamName = teamName
         self.allowedUsers = allowedUsers or []
+        self.gatewayNodeId = gatewayNodeId
 
 
 
@@ -116,7 +123,8 @@ def fetch_teams():
                 teamName=item['teamName']['S'],
                 allowedUsers=[
                     user['S'] for user in item.get('allowedUsers', {}).get('L', [])
-                ] if 'allowedUsers' in item else []
+                ] if 'allowedUsers' in item else [],
+                gatewayNodeId=int(item['gatewayNodeId']['N']) if 'gatewayNodeId' in item else None  # Fetch gatewayNodeId
             )
             for item in data.get('Items', [])
         ]
@@ -224,6 +232,54 @@ def send_message():
     print(f"SendMessage called by {user['cognito:username']}:")
     print("Target teams:", target_teams)
     print("Message:", message)
+
+    # Find team objects for each target team
+    with teams_cache_lock:
+        team_map = {team.teamId: team for team in teams_cache}
+
+    for team_id in target_teams:
+        team = team_map.get(team_id)
+        if not team or not team.gatewayNodeId:
+            print(f"Team {team_id} not found or missing gatewayNodeId, skipping.")
+            continue
+
+        topic = f"cloud/{team_id}"
+        #topic = "cloud/anton"
+        publish_to_aws_iot_core(
+            topic=topic,
+            message={
+                "from": team.gatewayNodeId,
+                "type": "sendtext",
+                "payload": "[OPS] " + message,
+                "channel": 1
+            }
+        )
+
+        # Set timezone to Europe/Budapest (or your local timezone)
+        local_tz = pytz.timezone('Europe/Amsterdam')
+        local_time = datetime.now(local_tz)
+        timestamp_str = local_time.strftime('%Y-%m-%dT%H:%M:%S')
+
+        # Save message to DynamoDB (RequestMessages table)
+        dynamo_payload = {
+            "TableName": "MeshtasticMessages",
+            "Item": {
+                "messageId": {"S": str(uuid.uuid4())},
+                "message": {"S": "[OPS] " + message},
+                "sender": {"S": "[OPS] " + user['name']},
+                "receiver": {"S": team_id},
+                "timestamp": {"S": timestamp_str}
+            }
+        }
+        try:
+            url = "https://nkfm9qap59.execute-api.eu-central-1.amazonaws.com/default/RequestMessages"
+            headers = signing_headers("POST", url, json.dumps(dynamo_payload))
+            response = requests.post(url, headers=headers, json=dynamo_payload)
+            if response.status_code != 200:
+                print(f"Failed to save message for team {team_id}: {response.text}")
+        except Exception as e:
+            print(f"Exception saving message for team {team_id}: {e}")
+
     return jsonify({"status": "ok"})
 
 
@@ -313,5 +369,98 @@ def keygen():
         "url": url
     })
 
+
+
+# AWS IoT MQTT connection setup
+received_count = 0
+received_all_event = threading.Event()
+
+# Make mqtt_connection a global variable
+mqtt_connection = None
+
+# Callback when connection is accidentally lost.
+def on_connection_interrupted(connection, error, **kwargs):
+    print("IoT Core Connection interrupted. error: {}".format(error))
+
+# Callback when an interrupted connection is re-established.
+def on_connection_resumed(connection, return_code, session_present, **kwargs):
+    print("IoT Core Connection resumed. return_code: {} session_present: {}".format(return_code, session_present))
+
+    if return_code == mqtt.ConnectReturnCode.ACCEPTED and not session_present:
+        print("IoT Core Session did not persist. Resubscribing to existing topics...")
+        resubscribe_future, _ = connection.resubscribe_existing_topics()
+
+        # Cannot synchronously wait for resubscribe result because we're on the connection's event-loop thread,
+        # evaluate result with a callback instead.
+        resubscribe_future.add_done_callback(on_resubscribe_complete)
+
+def on_resubscribe_complete(resubscribe_future):
+    resubscribe_results = resubscribe_future.result()
+    print("IoT Core Resubscribe results: {}".format(resubscribe_results))
+
+    for topic, qos in resubscribe_results['topics']:
+        if qos is None:
+            sys.exit("IoT Core Server rejected resubscribe to topic: {}".format(topic))
+
+# Callback when the connection successfully connects
+def on_connection_success(connection, callback_data):
+    assert isinstance(callback_data, mqtt.OnConnectionSuccessData)
+    print("IoT Core Connection Successful with return code: {} session present: {}".format(callback_data.return_code, callback_data.session_present))
+
+# Callback when a connection attempt fails
+def on_connection_failure(connection, callback_data):
+    assert isinstance(callback_data, mqtt.OnConnectionFailureData)
+    print("IoT Core Connection failed with error code: {}".format(callback_data.error))
+
+# Callback when a connection has been disconnected or shutdown successfully
+def on_connection_closed(connection, callback_data):
+    print("IoT Core Connection closed")
+
+def init_aws_iot_core():
+    global mqtt_connection
+    mqtt_connection = mqtt_connection_builder.mtls_from_path(
+        endpoint="adl9zhdzxqx4m-ats.iot.eu-central-1.amazonaws.com",
+        port=8883,
+        cert_filepath="iot_core/central_dashboard.cert.pem",
+        pri_key_filepath="iot_core/central_dashboard.private.key",
+        ca_filepath="iot_core/root-CA.crt",
+        on_connection_interrupted=None,
+        on_connection_resumed=on_connection_resumed,
+        # set client id to random UUID
+        #client_id="{}".format(uuid.uuid4()),
+        client_id="basicPubSub",
+        clean_session=False,
+        keep_alive_secs=30,
+        http_proxy_options=None,
+        on_connection_success=on_connection_success,
+        on_connection_failure=on_connection_failure,
+        on_connection_closed=on_connection_closed)
+
+    connect_future = mqtt_connection.connect()
+
+    # Future.result() waits until a result is available
+    connect_future.result()
+    print("Connected to IoT Core!")
+
+    # Subscribe
+    #print("Subscribing to topic '{}'...".format("cloud/anton"))
+    #subscribe_future, packet_id = mqtt_connection.subscribe(
+    #    topic="cloud/anton",
+    #    qos=mqtt.QoS.AT_LEAST_ONCE,
+    #    callback=None)
+
+    #subscribe_result = subscribe_future.result()
+    #print("Subscribed with {}".format(str(subscribe_result['qos'])))
+
+def publish_to_aws_iot_core(topic, message):
+    global mqtt_connection
+    print("Publishing message to IoT Core topic '{}': {}".format(topic, message))
+    message_json = json.dumps(message)
+    mqtt_connection.publish(
+        topic=topic,
+        payload=message_json,
+        qos=mqtt.QoS.AT_LEAST_ONCE)
+
 if __name__ == '__main__':
+    init_aws_iot_core()
     app.run(port=5001, debug=True)
