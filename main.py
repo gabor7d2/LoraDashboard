@@ -17,9 +17,13 @@ except ImportError:
 import re
 import sys
 import requests
+import secrets
+import string
 from boto3 import Session
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+
+import meshtastic_channelset_stripped_reduced_pb2 as proto
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Use a secure random key in production
@@ -226,10 +230,56 @@ def send_message():
 
 
 # Key generator
-# Static URL to encode in QR code
-STATIC_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+MESHTASTIC_URL_BASE = "https://meshtastic.org/e/#"
 
-def generate_qr():
+def generate_psk_bytes(length=32):
+    # Generate a cryptographically secure random ASCII string (printable, no whitespace)
+    chars = string.ascii_letters + string.digits
+    rand_str = ''.join(secrets.choice(chars) for _ in range(length))
+    # Convert to list of byte values
+    return [ord(c) for c in rand_str]
+
+def add_channel_settings(cs, psk_bytes, name, uplink_enabled = True, downlink_enabled = True, position_precision = 0, is_client_muted = False):
+    chan = cs.settings.add()
+    chan.psk = bytes(psk_bytes)
+    chan.name = name
+    chan.uplink_enabled = uplink_enabled
+    chan.downlink_enabled = downlink_enabled
+    chan.module_settings.position_precision = position_precision
+    chan.module_settings.is_client_muted = is_client_muted
+    return chan
+
+def generate_channelset_protobuf():
+    cs = proto.ChannelSet()
+
+    add_channel_settings(
+        cs,
+        psk_bytes=[1],
+        name="Public",
+        position_precision=13
+    )
+    add_channel_settings(
+        cs,
+        psk_bytes=generate_psk_bytes(),
+        name="mqtt",
+    )
+
+    # LoRaConfig
+    cs.lora_config.use_preset = True
+    cs.lora_config.modem_preset = proto.LoRaConfig.LONG_SLOW
+    cs.lora_config.region = proto.LoRaConfig.EU_868
+    cs.lora_config.hop_limit = 7
+    cs.lora_config.tx_enabled = True
+    cs.lora_config.tx_power = 27
+    cs.lora_config.sx126x_rx_boosted_gain = True
+    cs.lora_config.config_ok_to_mqtt = True
+
+    bytestream = cs.SerializeToString()
+    b64 = base64.urlsafe_b64encode(bytestream).decode().rstrip("=")
+    print("Generated ChannelSet: " + b64)
+    return b64
+
+def generate_qr(url):
     # Generate QR code
     qr = qrcode.QRCode(
         version=1,
@@ -237,7 +287,7 @@ def generate_qr():
         box_size=10,
         border=4,
     )
-    qr.add_data(STATIC_URL)
+    qr.add_data(url)
     qr.make(fit=True)
 
     # Create QR code image
@@ -254,11 +304,13 @@ def keygen():
     user = session.get('user')
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
+    
+    url = MESHTASTIC_URL_BASE + generate_channelset_protobuf()
 
-    img_base64 = generate_qr()
+    img_base64 = generate_qr(url)
     return jsonify({
         "img_data": img_base64,
-        "url": STATIC_URL
+        "url": url
     })
 
 if __name__ == '__main__':

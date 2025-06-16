@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+message ChannelSet {
+  repeated ChannelSettings settings = 1;
+  LoRaConfig lora_config = 2;
+}
+
+message ChannelSettings {
+  uint32 channel_num = 1 [deprecated = true];
+  bytes psk = 2;
+  string name = 3;
+  fixed32 id = 4;
+  bool uplink_enabled = 5;
+  bool downlink_enabled = 6;
+  ModuleSettings module_settings = 7;
+}
+
+message ModuleSettings {
+  uint32 position_precision = 1;
+  bool is_client_muted = 2;
+}
+
+message LoRaConfig {
+  enum RegionCode {
+    UNSET = 0;
+    US = 1;
+    EU_433 = 2;
+    EU_868 = 3;
+    CN = 4;
+    JP = 5;
+    ANZ = 6;
+    KR = 7;
+    TW = 8;
+    RU = 9;
+    IN = 10;
+    NZ_865 = 11;
+    TH = 12;
+    LORA_24 = 13;
+    UA_433 = 14;
+    UA_868 = 15;
+    MY_433 = 16;
+    MY_919 = 17;
+    SG_923 = 18;
+  }
+
+  enum ModemPreset {
+    LONG_FAST = 0;
+    LONG_SLOW = 1;
+    VERY_LONG_SLOW = 2 [deprecated = true];
+    MEDIUM_SLOW = 3;
+    MEDIUM_FAST = 4;
+    SHORT_SLOW = 5;
+    SHORT_FAST = 6;
+    LONG_MODERATE = 7;
+    SHORT_TURBO = 8;
+  }
+
+  bool use_preset = 1;
+  ModemPreset modem_preset = 2;
+  uint32 bandwidth = 3;
+  uint32 spread_factor = 4;
+  uint32 coding_rate = 5;
+  float frequency_offset = 6;
+  RegionCode region = 7;
+  uint32 hop_limit = 8;
+  bool tx_enabled = 9;
+  int32 tx_power = 10;
+  uint32 channel_num = 11;
+  bool override_duty_cycle = 12;
+  bool sx126x_rx_boosted_gain = 13;
+  float override_frequency = 14;
+  bool pa_fan_disabled = 15;
+  repeated uint32 ignore_incoming = 103;
+  bool ignore_mqtt = 104;
+  bool config_ok_to_mqtt = 105;
+}

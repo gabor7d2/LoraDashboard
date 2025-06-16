@@ -1,0 +1,333 @@
+syntax = "proto3";
+
+message ChannelSet {
+  /*
+   * Channel list with settings
+   */
+  repeated ChannelSettings settings = 1;
+  /*
+   * LoRa config
+   */
+  LoRaConfig lora_config = 2;
+}
+
+/*
+ * This information can be encoded as a QRcode/url so that other users can configure
+ * their radio to join the same channel.
+ * A note about how channel names are shown to users: channelname-X
+ * poundsymbol is a prefix used to indicate this is a channel name (idea from @professr).
+ * Where X is a letter from A-Z (base 26) representing a hash of the PSK for this
+ * channel - so that if the user changes anything about the channel (which does
+ * force a new PSK) this letter will also change. Thus preventing user confusion if
+ * two friends try to type in a channel name of "BobsChan" and then can't talk
+ * because their PSKs will be different.
+ * The PSK is hashed into this letter by "0x41 + [xor all bytes of the psk ] modulo 26"
+ * This also allows the option of someday if people have the PSK off (zero), the
+ * users COULD type in a channel name and be able to talk.
+ * FIXME: Add description of multi-channel support and how primary vs secondary channels are used.
+ * FIXME: explain how apps use channels for security.
+ * explain how remote settings and remote gpio are managed as an example
+ */
+message ChannelSettings {
+  /*
+   * Deprecated in favor of LoraConfig.channel_num
+   */
+  uint32 channel_num = 1 [deprecated = true];
+  /*
+   * A simple pre-shared key for now for crypto.
+   * Must be either 0 bytes (no crypto), 16 bytes (AES128), or 32 bytes (AES256).
+   * A special shorthand is used for 1 byte long psks.
+   * These psks should be treated as only minimally secure,
+   * because they are listed in this source code.
+   * Those bytes are mapped using the following scheme:
+   * `0` = No crypto
+   * `1` = The special "default" channel key: {0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59, 0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01}
+   * `2` through 10 = The default channel key, except with 1 through 9 added to the last byte.
+   * Shown to user as simple1 through 10
+   */
+  bytes psk = 2;
+  /*
+   * A SHORT name that will be packed into the URL.
+   * Less than 12 bytes.
+   * Something for end users to call the channel
+   * If this is the empty string it is assumed that this channel
+   * is the special (minimally secure) "Default"channel.
+   * In user interfaces it should be rendered as a local language translation of "X".
+   * For channel_num hashing empty string will be treated as "X".
+   * Where "X" is selected based on the English words listed above for ModemPreset
+   */
+  string name = 3;
+  /*
+   * Used to construct a globally unique channel ID.
+   * The full globally unique ID will be: "name.id" where ID is shown as base36.
+   * Assuming that the number of meshtastic users is below 20K (true for a long time)
+   * the chance of this 64 bit random number colliding with anyone else is super low.
+   * And the penalty for collision is low as well, it just means that anyone trying to decrypt channel messages might need to
+   * try multiple candidate channels.
+   * Any time a non wire compatible change is made to a channel, this field should be regenerated.
+   * There are a small number of 'special' globally known (and fairly) insecure standard channels.
+   * Those channels do not have a numeric id included in the settings, but instead it is pulled from
+   * a table of well known IDs.
+   * (see Well Known Channels FIXME)
+   */
+  fixed32 id = 4;
+  /*
+   * If true, messages on the mesh will be sent to the *public* internet by any gateway ndoe
+   */
+  bool uplink_enabled = 5;
+  /*
+   * If true, messages seen on the internet will be forwarded to the local mesh.
+   */
+  bool downlink_enabled = 6;
+  /*
+   * Per-channel module settings.
+   */
+  ModuleSettings module_settings = 7;
+}
+
+/*
+ * This message is specifically for modules to store per-channel configuration data.
+ */
+message ModuleSettings {
+  /*
+   * Bits of precision for the location sent in position packets.
+   */
+  uint32 position_precision = 1;
+  /*
+   * Controls whether or not the phone / clients should mute the current channel
+   * Useful for noisy public channels you don't necessarily want to disable
+   */
+  bool is_client_muted = 2;
+}
+
+/*
+* Lora Config
+*/
+message LoRaConfig {
+  enum RegionCode {
+    /*
+      * Region is not set
+      */
+    UNSET = 0;
+    /*
+      * United States
+      */
+    US = 1;
+    /*
+      * European Union 433mhz
+      */
+    EU_433 = 2;
+    /*
+      * European Union 868mhz
+      */
+    EU_868 = 3;
+    /*
+      * China
+      */
+    CN = 4;
+    /*
+      * Japan
+      */
+    JP = 5;
+    /*
+      * Australia / New Zealand
+      */
+    ANZ = 6;
+    /*
+      * Korea
+      */
+    KR = 7;
+    /*
+      * Taiwan
+      */
+    TW = 8;
+    /*
+      * Russia
+      */
+    RU = 9;
+    /*
+      * India
+      */
+    IN = 10;
+    /*
+      * New Zealand 865mhz
+      */
+    NZ_865 = 11;
+    /*
+      * Thailand
+      */
+    TH = 12;
+    /*
+      * WLAN Band
+      */
+    LORA_24 = 13;
+    /*
+      * Ukraine 433mhz
+      */
+    UA_433 = 14;
+    /*
+      * Ukraine 868mhz
+      */
+    UA_868 = 15;
+    /*
+      * Malaysia 433mhz
+      */
+    MY_433 = 16;
+    /*
+      * Malaysia 919mhz
+      */
+    MY_919 = 17;
+    /*
+      * Singapore 923mhz
+      */
+    SG_923 = 18;
+  }
+  /*
+    * Standard predefined channel settings
+    * Note: these mappings must match ModemPreset Choice in the device code.
+    */
+  enum ModemPreset {
+    /*
+      * Long Range - Fast
+      */
+    LONG_FAST = 0;
+    /*
+      * Long Range - Slow
+      */
+    LONG_SLOW = 1;
+    /*
+      * Very Long Range - Slow
+      * Deprecated in 2.5: Works only with txco and is unusably slow
+      */
+    VERY_LONG_SLOW = 2 [deprecated = true];
+    /*
+      * Medium Range - Slow
+      */
+    MEDIUM_SLOW = 3;
+    /*
+      * Medium Range - Fast
+      */
+    MEDIUM_FAST = 4;
+    /*
+      * Short Range - Slow
+      */
+    SHORT_SLOW = 5;
+    /*
+      * Short Range - Fast
+      */
+    SHORT_FAST = 6;
+    /*
+      * Long Range - Moderately Fast
+      */
+    LONG_MODERATE = 7;
+    /*
+      * Short Range - Turbo
+      * This is the fastest preset and the only one with 500kHz bandwidth.
+      * It is not legal to use in all regions due to this wider bandwidth.
+      */
+    SHORT_TURBO = 8;
+  }
+  /*
+    * When enabled, the `modem_preset` fields will be adhered to, else the `bandwidth`/`spread_factor`/`coding_rate`
+    * will be taked from their respective manually defined fields
+    */
+  bool use_preset = 1;
+  /*
+    * Either modem_config or bandwidth/spreading/coding will be specified - NOT BOTH.
+    * As a heuristic: If bandwidth is specified, do not use modem_config.
+    * Because protobufs take ZERO space when the value is zero this works out nicely.
+    * This value is replaced by bandwidth/spread_factor/coding_rate.
+    * If you'd like to experiment with other options add them to MeshRadio.cpp in the device code.
+    */
+  ModemPreset modem_preset = 2;
+  /*
+    * Bandwidth in MHz
+    * Certain bandwidth numbers are 'special' and will be converted to the
+    * appropriate floating point value: 31 -> 31.25MHz
+    */
+  uint32 bandwidth = 3;
+  /*
+    * A number from 7 to 12.
+    * Indicates number of chirps per symbol as 1<<spread_factor.
+    */
+  uint32 spread_factor = 4;
+  /*
+    * The denominator of the coding rate.
+    * ie for 4/5, the value is 5. 4/8 the value is 8.
+    */
+  uint32 coding_rate = 5;
+  /*
+    * This parameter is for advanced users with advanced test equipment, we do not recommend most users use it.
+    * A frequency offset that is added to to the calculated band center frequency.
+    * Used to correct for crystal calibration errors.
+    */
+  float frequency_offset = 6;
+  /*
+    * The region code for the radio (US, CN, EU433, etc...)
+    */
+  RegionCode region = 7;
+  /*
+    * Maximum number of hops. This can't be greater than 7.
+    * Default of 3
+    * Attempting to set a value > 7 results in the default
+    */
+  uint32 hop_limit = 8;
+  /*
+    * Disable TX from the LoRa radio. Useful for hot-swapping antennas and other tests.
+    * Defaults to false
+    */
+  bool tx_enabled = 9;
+  /*
+    * If zero, then use default max legal continuous power (ie. something that won't
+    * burn out the radio hardware)
+    * In most cases you should use zero here.
+    * Units are in dBm.
+    */
+  int32 tx_power = 10;
+  /*
+    * This controls the actual hardware frequency the radio transmits on.
+    * Most users should never need to be exposed to this field/concept.
+    * A channel number between 1 and NUM_CHANNELS (whatever the max is in the current region).
+    * If ZERO then the rule is "use the old channel name hash based
+    * algorithm to derive the channel number")
+    * If using the hash algorithm the channel number will be: hash(channel_name) %
+    * NUM_CHANNELS (Where num channels depends on the regulatory region).
+    */
+  uint32 channel_num = 11;
+  /*
+    * If true, duty cycle limits will be exceeded and thus you're possibly not following
+    * the local regulations if you're not a HAM.
+    * Has no effect if the duty cycle of the used region is 100%.
+    */
+  bool override_duty_cycle = 12;
+  /*
+    * If true, sets RX boosted gain mode on SX126X based radios
+    */
+  bool sx126x_rx_boosted_gain = 13;
+  /*
+    * This parameter is for advanced users and licensed HAM radio operators.
+    * Ignore Channel Calculation and use this frequency instead. The frequency_offset
+    * will still be applied. This will allow you to use out-of-band frequencies.
+    * Please respect your local laws and regulations. If you are a HAM, make sure you
+    * enable HAM mode and turn off encryption.
+    */
+  float override_frequency = 14;
+  /*
+    * If true, disable the build-in PA FAN using pin define in RF95_FAN_EN.
+    */
+  bool pa_fan_disabled = 15;
+  /*
+    * For testing it is useful sometimes to force a node to never listen to
+    * particular other nodes (simulating radio out of range). All nodenums listed
+    * in ignore_incoming will have packets they send dropped on receive (by router.cpp)
+    */
+  repeated uint32 ignore_incoming = 103;
+  /*
+    * If true, the device will not process any packets received via LoRa that passed via MQTT anywhere on the path towards it.
+    */
+  bool ignore_mqtt = 104;
+  /*
+    * Sets the ok_to_mqtt bit on outgoing packets
+    */
+  bool config_ok_to_mqtt = 105;
+}
